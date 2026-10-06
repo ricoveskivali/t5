@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="et">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="T5">
+<meta name="theme-color" content="#15100f">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<title>T5 Vana-Lõuna</title>
+<style>
+/* One screen: stop header, giant countdown to the next tram, then the queue behind it. */
+:root {
+  --bg: #15100f;
+  --surface: #211918;
+  --line: #3a2d2b;
+  --fg: #f6eeec;
+  --muted: #a8948f;
+  --tram: #e2342b;      /* Tallinn tram red */
+  --late: #f2b134;
+  --display: ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+  --body: system-ui, -apple-system, sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--body);
+  padding: calc(env(safe-area-inset-top, 0px) + 20px) 20px calc(env(safe-area-inset-bottom, 0px) + 20px);
+  -webkit-user-select: none; user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+main { max-width: 440px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px; }
+header { display: flex; align-items: center; gap: 12px; }
+.badge {
+  background: var(--tram); color: #fff; font: 700 1.25rem/1 var(--display);
+  padding: 8px 10px; border-radius: 8px; letter-spacing: .02em;
+}
+.stop { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.stop b { font-size: 1.15rem; }
+.stop span { color: var(--muted); font-size: .9rem; }
+.status { margin-left: auto; color: var(--muted); font-size: .8rem; text-align: right; }
+.status .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #4cc47a; margin-right: 5px; vertical-align: 1px; }
+.status.stale .dot { background: var(--late); }
+
+.next { display: flex; flex-direction: column; gap: 6px; padding-block: 8px; }
+.label { color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .12em; }
+.big { font: 800 clamp(5.5rem, 34vw, 9rem)/.9 var(--display); letter-spacing: -.04em; }
+.big small { font-size: .32em; letter-spacing: 0; font-weight: 600; color: var(--muted); margin-left: 6px; }
+.at { font-size: 1.15rem; color: var(--muted); }
+.at b { color: var(--fg); }
+.late { color: var(--late); }
+
+ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+li { display: flex; align-items: baseline; gap: 12px; padding: 14px 0; border-top: 1px solid var(--line); }
+li .t { font-size: 1.3rem; font-weight: 600; }
+li .m { margin-left: auto; color: var(--muted); }
+li.past { opacity: .35; }
+li.hl .t { color: var(--tram); }
+
+details { background: var(--surface); border-radius: 12px; padding: 4px 16px; }
+summary { padding: 12px 0; color: var(--muted); cursor: pointer; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 8px 4px; padding-bottom: 14px; }
+.grid span { font-size: .95rem; }
+.grid .gone { opacity: .3; }
+.grid .nx { color: var(--tram); font-weight: 700; }
+.note { color: var(--muted); font-size: .8rem; }
+.err { color: var(--late); font-size: .9rem; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="badge">T5</div>
+    <div class="stop"><b>Vana-Lõuna</b><span>→ Kopli</span></div>
+    <div class="status" id="status"><span class="dot"></span>…</div>
+  </header>
+
+  <section class="next" aria-live="polite">
+    <div class="label">Järgmine tramm</div>
+    <div class="big" id="big">–</div>
+    <div class="at" id="at">Laadin väljumisi…</div>
+  </section>
+
+  <section>
+    <div class="label">Seejärel</div>
+    <ul id="list"></ul>
+  </section>
+
+  <details id="pdf">
+    <summary>Tööpäeva sõiduplaan (PDF-ist)</summary>
+    <div class="grid" id="grid"></div>
+    <p class="note">Kolmapäeva 07.10.2026 väljatrükk. Nädalavahetusel on aeg teine — ülal olevad reaalajas ajad on alati õiged.</p>
+  </details>
+</main>
+
+<script>
+const STOP_ID = 1255; // transport.tallinn.ee SIRI id for stop 11309-1 Vana-Lõuna
+const FEED = id => `https://transport.tallinn.ee/siri-stop-departures.php?stopid=${id}&time=${Date.now()}`;
+const PDF_TIMES = "05:00 05:18 05:36 05:59 06:21 06:36 06:55 07:16 07:38 08:03 08:24 08:44 09:05 09:27 09:40 10:07 10:37 11:03 11:30 11:56 12:22 12:48 13:14 13:40 14:06 14:32 14:52 15:14 15:37 15:59 16:19 16:39 16:59 17:20 17:40 18:03 18:27 18:52 19:26 19:54 20:15 20:42 21:12".split(" ");
+
+let deps = [];          // [{expected, scheduled}] in seconds after midnight
+let serverNow = null;   // seconds after midnight at fetch time (Tallinn)
+let fetchedAt = 0;      // Date.now() at fetch
+
+const $ = id => document.getElementById(id);
+const hhmm = s => { s = ((s % 86400) + 86400) % 86400; return String(Math.floor(s/3600)).padStart(2,"0") + ":" + String(Math.floor(s/60)%60).padStart(2,"0"); };
+
+function tallinnNowSec() {
+  const p = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Tallinn", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(new Date());
+  const g = t => +p.find(x => x.type === t).value;
+  return g("hour")*3600 + g("minute")*60 + g("second");
+}
+function nowSec() {
+  return serverNow == null ? tallinnNowSec() : serverNow + (Date.now() - fetchedAt) / 1000;
+}
+
+async function load() {
+  try {
+    const r = await fetch(FEED(STOP_ID), { cache: "no-store" });
+    if (!r.ok) throw new Error(r.status);
+    const lines = (await r.text()).trim().split("\n");
+    serverNow = +lines[0].split(",")[4];
+    fetchedAt = Date.now();
+    deps = lines.slice(2).map(l => l.split(","))
+      .filter(c => c[1] === "T5")
+      .map(c => ({ expected: +c[2], scheduled: +c[3] }));
+    $("status").className = "status";
+    $("status").innerHTML = `<span class="dot"></span>Reaalajas`;
+  } catch (e) {
+    $("status").className = "status stale";
+    $("status").innerHTML = `<span class="dot"></span>Ühenduseta`;
+  }
+  render();
+}
+
+function render() {
+  const now = nowSec();
+  const live = deps.filter(d => d.expected > now - 30);
+  let first = live[0], rest = live.slice(1);
+
+  // No live data (offline / feed empty): fall back to the PDF times.
+  let fromPdf = false;
+  if (!first) {
+    const t = tallinnNowSec();
+    const pdf = PDF_TIMES.map(x => { const [h,m] = x.split(":"); return { expected: h*3600 + m*60, scheduled: h*3600 + m*60 }; })
+      .filter(d => d.expected > t);
+    if (pdf.length) { first = pdf[0]; rest = pdf.slice(1, 4); fromPdf = true; }
+  }
+
+  if (!first) {
+    $("big").innerHTML = "–";
+    $("at").textContent = "Täna rohkem tramme ei leitud.";
+  } else {
+    const secs = first.expected - now;
+    const mins = Math.max(0, Math.floor(secs / 60));
+    $("big").innerHTML = secs < 45 ? "Kohe" : `${mins}<small>min</small>`;
+    const delay = Math.round((first.expected - first.scheduled) / 60);
+    const lateTxt = delay >= 1 ? ` · <span class="late">hilineb ${delay} min</span>` : "";
+    $("at").innerHTML = `Väljub <b>${hhmm(first.expected)}</b>${lateTxt}${fromPdf ? " · sõiduplaani järgi" : ""}`;
+  }
+
+  $("list").innerHTML = rest.length ? rest.map(d => {
+    const m = Math.max(0, Math.floor((d.expected - now) / 60));
+    return `<li><span class="t">${hhmm(d.expected)}</span><span class="m">${m} min pärast</span></li>`;
+  }).join("") : `<li><span class="m" style="margin:0">Reaalajas näidatakse ainult lähimaid tramme — vaata sõiduplaani allpool.</span></li>`;
+
+  const t = tallinnNowSec();
+  let marked = false;
+  $("grid").innerHTML = PDF_TIMES.map(x => {
+    const [h,m] = x.split(":"); const s = h*3600 + m*60;
+    let cls = s < t ? "gone" : "";
+    if (!cls && !marked) { cls = "nx"; marked = true; }
+    return `<span class="${cls}">${x}</span>`;
+  }).join("");
+}
+
+load();
+setInterval(load, 20000);
+setInterval(render, 1000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
+</script>
+</body>
+</html>
